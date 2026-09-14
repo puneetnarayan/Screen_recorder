@@ -86,11 +86,12 @@ function App() {
       </section>
 
       <p className="hint">
-        To capture audio from a Zoom/Teams call, a video player, or any other app's sound: when the
-        share picker opens, choose <strong>Entire Screen</strong> (a single window usually carries
-        no audio) and check <strong>Share audio</strong>. On Windows and ChromeOS this captures all
-        system audio; on macOS, Chrome can only capture a shared <em>tab's</em> own audio — it
-        cannot capture other apps' audio at all.
+        When the share picker opens, choose <strong>Entire Screen</strong> — a single window
+        usually carries no audio, and sharing a browser tab can record hardware-accelerated video
+        (e.g. a YouTube video) as a blank frame due to a known Chrome limitation. Also check{' '}
+        <strong>Share audio</strong> to capture a Zoom/Teams call, a video player, or any other
+        app's sound. On Windows and ChromeOS this captures all system audio; on macOS, Chrome can
+        only capture a shared tab's own audio and cannot capture other apps' audio at all.
       </p>
 
       <section className="controls">

@@ -94,7 +94,13 @@ export function useScreenRecorder() {
 
       if (includeSystemAudio && !displayAudioTrack) {
         warnings.push(
-          "No system audio came through — in the share picker, choose \"Entire Screen\" (or a browser tab) and check \"Share audio\"; sharing a single window usually carries no audio in Chrome."
+          'No system audio came through — in the share picker, choose "Entire Screen" and check "Share audio"; sharing a single window usually carries no audio in Chrome.'
+        );
+      }
+
+      if (videoTrack.getSettings().displaySurface === 'browser') {
+        warnings.push(
+          'You shared a browser tab — Chrome has a known issue where hardware-accelerated video (e.g. a YouTube video) can record as a blank frame in tab capture. If the recording comes out blank, redo it sharing "Entire Screen" instead, which does not have this issue.'
         );
       }
 
