@@ -52,7 +52,7 @@ export function useScreenRecorder() {
   const durationRef = useRef({ accumulatedMs: 0, segmentStartMs: 0, isPaused: false });
   const pendingRef = useRef<PendingCapture | null>(null);
   const cropVideoElRef = useRef<HTMLVideoElement | null>(null);
-  const rafRef = useRef<number | null>(null);
+  const drawIntervalRef = useRef<number | null>(null);
 
   const stopTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -62,9 +62,9 @@ export function useScreenRecorder() {
   }, []);
 
   const releaseCapture = useCallback(() => {
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
+    if (drawIntervalRef.current !== null) {
+      window.clearInterval(drawIntervalRef.current);
+      drawIntervalRef.current = null;
     }
     if (cropVideoElRef.current) {
       cropVideoElRef.current.srcObject = null;
@@ -233,13 +233,15 @@ export function useScreenRecorder() {
       canvas.height = Math.max(2, Math.round(rect.height));
       const ctx = canvas.getContext('2d');
 
-      const draw = () => {
+      // Uses setInterval rather than requestAnimationFrame: rAF is throttled/suspended
+      // in a background tab, which would freeze the recording the moment the user
+      // switches away from this tab. A plain timer keeps running (screen-recording
+      // pages are exempted from Chrome's aggressive background timer throttling).
+      drawIntervalRef.current = window.setInterval(() => {
         if (ctx && video.readyState >= 2) {
           ctx.drawImage(video, rect.x, rect.y, rect.width, rect.height, 0, 0, canvas.width, canvas.height);
         }
-        rafRef.current = requestAnimationFrame(draw);
-      };
-      rafRef.current = requestAnimationFrame(draw);
+      }, 1000 / 30);
 
       const croppedVideoTrack = canvas.captureStream(30).getVideoTracks()[0];
       cleanupTracksRef.current.push(croppedVideoTrack);
