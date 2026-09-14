@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import fixWebmDuration from 'fix-webm-duration';
 
 export type RecorderStatus = 'idle' | 'recording' | 'paused' | 'stopped';
 
@@ -32,6 +33,7 @@ export function useScreenRecorder() {
   const rawTracksRef = useRef<MediaStreamTrack[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
   const timerRef = useRef<number | null>(null);
+  const durationRef = useRef({ accumulatedMs: 0, segmentStartMs: 0, isPaused: false });
 
   const stopTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -128,17 +130,25 @@ export function useScreenRecorder() {
         if (event.data.size > 0) chunksRef.current.push(event.data);
       };
       recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: mimeType || 'video/webm' });
-        setRecordedUrl(URL.createObjectURL(blob));
-        releaseCapture();
-        setStatus('stopped');
-        stopTimer();
+        const rawBlob = new Blob(chunksRef.current, { type: mimeType || 'video/webm' });
+        const { accumulatedMs, segmentStartMs, isPaused } = durationRef.current;
+        const totalMs = accumulatedMs + (isPaused ? 0 : performance.now() - segmentStartMs);
+
+        fixWebmDuration(rawBlob, totalMs, { logger: false })
+          .then((fixedBlob) => setRecordedUrl(URL.createObjectURL(fixedBlob)))
+          .catch(() => setRecordedUrl(URL.createObjectURL(rawBlob)))
+          .finally(() => {
+            releaseCapture();
+            setStatus('stopped');
+            stopTimer();
+          });
       };
 
       videoTrack.addEventListener('ended', () => {
         if (recorder.state !== 'inactive') recorder.stop();
       });
 
+      durationRef.current = { accumulatedMs: 0, segmentStartMs: performance.now(), isPaused: false };
       recorder.start(1000);
       recorderRef.current = recorder;
       setStatus('recording');
@@ -152,6 +162,8 @@ export function useScreenRecorder() {
   const pauseRecording = useCallback(() => {
     if (recorderRef.current?.state === 'recording') {
       recorderRef.current.pause();
+      durationRef.current.accumulatedMs += performance.now() - durationRef.current.segmentStartMs;
+      durationRef.current.isPaused = true;
       setStatus('paused');
       stopTimer();
     }
@@ -160,6 +172,8 @@ export function useScreenRecorder() {
   const resumeRecording = useCallback(() => {
     if (recorderRef.current?.state === 'paused') {
       recorderRef.current.resume();
+      durationRef.current.segmentStartMs = performance.now();
+      durationRef.current.isPaused = false;
       setStatus('recording');
       timerRef.current = window.setInterval(() => {
         setElapsedSeconds((prev) => prev + 1);
