@@ -15,8 +15,8 @@ const supportsDisplayMedia =
   typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia;
 
 function App() {
-  const [includeMic, setIncludeMic] = useState(true);
   const [includeSystemAudio, setIncludeSystemAudio] = useState(true);
+  const [includeMic, setIncludeMic] = useState(false);
 
   const {
     status,
@@ -68,26 +68,29 @@ function App() {
         <label className={isActive ? 'disabled' : undefined}>
           <input
             type="checkbox"
-            checked={includeMic}
-            disabled={isActive}
-            onChange={(e) => setIncludeMic(e.target.checked)}
-          />
-          Microphone audio
-        </label>
-        <label className={isActive ? 'disabled' : undefined}>
-          <input
-            type="checkbox"
             checked={includeSystemAudio}
             disabled={isActive}
             onChange={(e) => setIncludeSystemAudio(e.target.checked)}
           />
-          System / tab audio
+          System audio (meetings, media players)
+        </label>
+        <label className={isActive ? 'disabled' : undefined}>
+          <input
+            type="checkbox"
+            checked={includeMic}
+            disabled={isActive}
+            onChange={(e) => setIncludeMic(e.target.checked)}
+          />
+          Microphone (optional narration)
         </label>
       </section>
 
       <p className="hint">
-        System audio capture depends on your browser and OS: reliable on Chrome/Edge (share a tab,
-        or the whole screen on Windows/ChromeOS), but Chrome on macOS cannot capture system audio.
+        To capture audio from a Zoom/Teams call, a video player, or any other app's sound: when the
+        share picker opens, choose <strong>Entire Screen</strong> (a single window usually carries
+        no audio) and check <strong>Share audio</strong>. On Windows and ChromeOS this captures all
+        system audio; on macOS, Chrome can only capture a shared <em>tab's</em> own audio — it
+        cannot capture other apps' audio at all.
       </p>
 
       <section className="controls">

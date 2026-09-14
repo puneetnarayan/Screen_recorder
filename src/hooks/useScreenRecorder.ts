@@ -75,18 +75,26 @@ export function useScreenRecorder() {
         return;
       }
 
+      const warnings: string[] = [];
+
       let micStream: MediaStream | null = null;
       if (includeMic) {
         try {
           micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         } catch {
-          setError('Microphone access was denied; recording video (and system audio, if selected) only.');
+          warnings.push('Microphone access was denied.');
         }
       }
 
       const videoTrack = displayStream.getVideoTracks()[0];
       const displayAudioTrack = displayStream.getAudioTracks()[0] ?? null;
       const micAudioTrack = micStream?.getAudioTracks()[0] ?? null;
+
+      if (includeSystemAudio && !displayAudioTrack) {
+        warnings.push(
+          "No system audio came through — in the share picker, choose \"Entire Screen\" (or a browser tab) and check \"Share audio\"; sharing a single window usually carries no audio in Chrome."
+        );
+      }
 
       let outputAudioTrack: MediaStreamTrack | null = null;
       if (displayAudioTrack && micAudioTrack) {
@@ -110,6 +118,8 @@ export function useScreenRecorder() {
       if (outputAudioTrack) outputTracks.push(outputAudioTrack);
       const combinedStream = new MediaStream(outputTracks);
       setPreviewStream(combinedStream);
+
+      if (warnings.length > 0) setError(warnings.join(' '));
 
       const mimeType = pickMimeType();
       const recorder = new MediaRecorder(combinedStream, mimeType ? { mimeType } : undefined);
