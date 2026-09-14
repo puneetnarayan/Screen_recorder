@@ -1,11 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import fixWebmDuration from 'fix-webm-duration';
 
-export type RecorderStatus = 'idle' | 'recording' | 'paused' | 'stopped';
+export type RecorderStatus = 'idle' | 'selecting-area' | 'recording' | 'paused' | 'stopped';
 
 export interface StartRecordingOptions {
   includeMic: boolean;
   includeSystemAudio: boolean;
+  customArea: boolean;
+}
+
+export interface AreaRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface PendingCapture {
+  rawVideoTrack: MediaStreamTrack;
+  outputAudioTrack: MediaStreamTrack | null;
+  warnings: string[];
 }
 
 const MIME_CANDIDATES = [
@@ -26,14 +40,19 @@ export function useScreenRecorder() {
   const [error, setError] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
+  const [recordedBytes, setRecordedBytes] = useState(0);
   const [previewStream, setPreviewStream] = useState<MediaStream | null>(null);
+  const [sourceVideoSize, setSourceVideoSize] = useState<{ width: number; height: number } | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const rawTracksRef = useRef<MediaStreamTrack[]>([]);
+  const cleanupTracksRef = useRef<MediaStreamTrack[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
   const timerRef = useRef<number | null>(null);
   const durationRef = useRef({ accumulatedMs: 0, segmentStartMs: 0, isPaused: false });
+  const pendingRef = useRef<PendingCapture | null>(null);
+  const cropVideoElRef = useRef<HTMLVideoElement | null>(null);
+  const rafRef = useRef<number | null>(null);
 
   const stopTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -43,29 +62,91 @@ export function useScreenRecorder() {
   }, []);
 
   const releaseCapture = useCallback(() => {
-    rawTracksRef.current.forEach((track) => track.stop());
-    rawTracksRef.current = [];
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (cropVideoElRef.current) {
+      cropVideoElRef.current.srcObject = null;
+      cropVideoElRef.current = null;
+    }
+    cleanupTracksRef.current.forEach((track) => track.stop());
+    cleanupTracksRef.current = [];
     if (audioContextRef.current) {
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
+    pendingRef.current = null;
     setPreviewStream(null);
+    setSourceVideoSize(null);
   }, []);
 
+  const beginRecording = useCallback(
+    (videoTrack: MediaStreamTrack, audioTrack: MediaStreamTrack | null, warnings: string[]) => {
+      const outputTracks: MediaStreamTrack[] = [videoTrack];
+      if (audioTrack) outputTracks.push(audioTrack);
+      setPreviewStream(new MediaStream(outputTracks));
+
+      if (warnings.length > 0) setError(warnings.join(' '));
+
+      chunksRef.current = [];
+      setRecordedBytes(0);
+      setElapsedSeconds(0);
+
+      const mimeType = pickMimeType();
+      const recorder = new MediaRecorder(new MediaStream(outputTracks), mimeType ? { mimeType } : undefined);
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+          setRecordedBytes((prev) => prev + event.data.size);
+        }
+      };
+      recorder.onstop = () => {
+        const rawBlob = new Blob(chunksRef.current, { type: mimeType || 'video/webm' });
+        const { accumulatedMs, segmentStartMs, isPaused } = durationRef.current;
+        const totalMs = accumulatedMs + (isPaused ? 0 : performance.now() - segmentStartMs);
+
+        fixWebmDuration(rawBlob, totalMs, { logger: false })
+          .then((fixedBlob) => {
+            setRecordedUrl(URL.createObjectURL(fixedBlob));
+            setRecordedBytes(fixedBlob.size);
+          })
+          .catch(() => setRecordedUrl(URL.createObjectURL(rawBlob)))
+          .finally(() => {
+            releaseCapture();
+            setStatus('stopped');
+            stopTimer();
+          });
+      };
+
+      videoTrack.addEventListener('ended', () => {
+        if (recorder.state !== 'inactive') recorder.stop();
+      });
+
+      durationRef.current = { accumulatedMs: 0, segmentStartMs: performance.now(), isPaused: false };
+      recorder.start(1000);
+      recorderRef.current = recorder;
+      setStatus('recording');
+      timerRef.current = window.setInterval(() => {
+        setElapsedSeconds((prev) => prev + 1);
+      }, 1000);
+    },
+    [releaseCapture, stopTimer]
+  );
+
   const startRecording = useCallback(
-    async ({ includeMic, includeSystemAudio }: StartRecordingOptions) => {
+    async ({ includeMic, includeSystemAudio, customArea }: StartRecordingOptions) => {
       setError(null);
       if (recordedUrl) {
         URL.revokeObjectURL(recordedUrl);
         setRecordedUrl(null);
       }
-      chunksRef.current = [];
-      setElapsedSeconds(0);
 
       let displayStream: MediaStream;
       try {
         displayStream = await navigator.mediaDevices.getDisplayMedia({
-          video: { frameRate: 30 },
+          video: { frameRate: 30, cursor: 'always' } as MediaTrackConstraints,
           audio: includeSystemAudio,
         });
       } catch (err) {
@@ -116,54 +197,68 @@ export function useScreenRecorder() {
         outputAudioTrack = displayAudioTrack ?? micAudioTrack;
       }
 
-      rawTracksRef.current = [
+      cleanupTracksRef.current = [
         videoTrack,
         ...(displayAudioTrack ? [displayAudioTrack] : []),
         ...(micAudioTrack ? [micAudioTrack] : []),
       ];
 
-      const outputTracks: MediaStreamTrack[] = [videoTrack];
-      if (outputAudioTrack) outputTracks.push(outputAudioTrack);
-      const combinedStream = new MediaStream(outputTracks);
-      setPreviewStream(combinedStream);
+      if (!customArea) {
+        beginRecording(videoTrack, outputAudioTrack, warnings);
+        return;
+      }
 
-      if (warnings.length > 0) setError(warnings.join(' '));
+      pendingRef.current = { rawVideoTrack: videoTrack, outputAudioTrack, warnings };
+      setPreviewStream(new MediaStream([videoTrack]));
+      const { width, height } = videoTrack.getSettings();
+      setSourceVideoSize({ width: width ?? 1280, height: height ?? 720 });
+      setStatus('selecting-area');
+    },
+    [recordedUrl, beginRecording]
+  );
 
-      const mimeType = pickMimeType();
-      const recorder = new MediaRecorder(combinedStream, mimeType ? { mimeType } : undefined);
+  const confirmAreaSelection = useCallback(
+    (rect: AreaRect) => {
+      const pending = pendingRef.current;
+      if (!pending) return;
 
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunksRef.current.push(event.data);
+      const video = document.createElement('video');
+      video.muted = true;
+      video.srcObject = new MediaStream([pending.rawVideoTrack]);
+      video.play().catch(() => {});
+      cropVideoElRef.current = video;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(2, Math.round(rect.width));
+      canvas.height = Math.max(2, Math.round(rect.height));
+      const ctx = canvas.getContext('2d');
+
+      const draw = () => {
+        if (ctx && video.readyState >= 2) {
+          ctx.drawImage(video, rect.x, rect.y, rect.width, rect.height, 0, 0, canvas.width, canvas.height);
+        }
+        rafRef.current = requestAnimationFrame(draw);
       };
-      recorder.onstop = () => {
-        const rawBlob = new Blob(chunksRef.current, { type: mimeType || 'video/webm' });
-        const { accumulatedMs, segmentStartMs, isPaused } = durationRef.current;
-        const totalMs = accumulatedMs + (isPaused ? 0 : performance.now() - segmentStartMs);
+      rafRef.current = requestAnimationFrame(draw);
 
-        fixWebmDuration(rawBlob, totalMs, { logger: false })
-          .then((fixedBlob) => setRecordedUrl(URL.createObjectURL(fixedBlob)))
-          .catch(() => setRecordedUrl(URL.createObjectURL(rawBlob)))
-          .finally(() => {
-            releaseCapture();
-            setStatus('stopped');
-            stopTimer();
-          });
-      };
+      const croppedVideoTrack = canvas.captureStream(30).getVideoTracks()[0];
+      cleanupTracksRef.current.push(croppedVideoTrack);
 
-      videoTrack.addEventListener('ended', () => {
-        if (recorder.state !== 'inactive') recorder.stop();
+      pending.rawVideoTrack.addEventListener('ended', () => {
+        if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+          recorderRef.current.stop();
+        }
       });
 
-      durationRef.current = { accumulatedMs: 0, segmentStartMs: performance.now(), isPaused: false };
-      recorder.start(1000);
-      recorderRef.current = recorder;
-      setStatus('recording');
-      timerRef.current = window.setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-      }, 1000);
+      beginRecording(croppedVideoTrack, pending.outputAudioTrack, pending.warnings);
     },
-    [recordedUrl, releaseCapture, stopTimer]
+    [beginRecording]
   );
+
+  const cancelAreaSelection = useCallback(() => {
+    releaseCapture();
+    setStatus('idle');
+  }, [releaseCapture]);
 
   const pauseRecording = useCallback(() => {
     if (recorderRef.current?.state === 'recording') {
@@ -190,8 +285,10 @@ export function useScreenRecorder() {
   const stopRecording = useCallback(() => {
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
       recorderRef.current.stop();
+    } else if (pendingRef.current) {
+      cancelAreaSelection();
     }
-  }, []);
+  }, [cancelAreaSelection]);
 
   useEffect(() => {
     return () => {
@@ -209,8 +306,12 @@ export function useScreenRecorder() {
     error,
     elapsedSeconds,
     recordedUrl,
+    recordedBytes,
     previewStream,
+    sourceVideoSize,
     startRecording,
+    confirmAreaSelection,
+    cancelAreaSelection,
     pauseRecording,
     resumeRecording,
     stopRecording,

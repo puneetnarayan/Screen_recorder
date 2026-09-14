@@ -84,6 +84,12 @@ button:focus-visible,
   min-width: 4.5ch;
 }
 
+.filesize {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--text);
+}
+
 .error {
   color: #d92d20;
   font-size: 14px;

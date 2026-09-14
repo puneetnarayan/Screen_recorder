@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useScreenRecorder } from './hooks/useScreenRecorder';
+import { AreaSelector } from './components/AreaSelector';
 import './App.css';
 
 function formatDuration(totalSeconds: number): string {
@@ -10,6 +11,18 @@ function formatDuration(totalSeconds: number): string {
   return hours > 0 ? `${pad(hours)}:${pad(minutes)}:${pad(seconds)}` : `${pad(minutes)}:${pad(seconds)}`;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
 const isSecureContext = typeof window !== 'undefined' && window.isSecureContext;
 const supportsDisplayMedia =
   typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia;
@@ -17,14 +30,19 @@ const supportsDisplayMedia =
 function App() {
   const [includeSystemAudio, setIncludeSystemAudio] = useState(true);
   const [includeMic, setIncludeMic] = useState(false);
+  const [customArea, setCustomArea] = useState(false);
 
   const {
     status,
     error,
     elapsedSeconds,
     recordedUrl,
+    recordedBytes,
     previewStream,
+    sourceVideoSize,
     startRecording,
+    confirmAreaSelection,
+    cancelAreaSelection,
     pauseRecording,
     resumeRecording,
     stopRecording,
@@ -32,16 +50,18 @@ function App() {
 
   const previewRef = useRef<HTMLVideoElement>(null);
 
-  useEffect(() => {
-    if (previewRef.current) {
-      previewRef.current.srcObject = previewStream;
-    }
-  }, [previewStream]);
-
+  const isSelectingArea = status === 'selecting-area';
   const isRecording = status === 'recording';
   const isPaused = status === 'paused';
   const isActive = isRecording || isPaused;
   const canStart = status === 'idle' || status === 'stopped';
+  const optionsDisabled = isActive || isSelectingArea;
+
+  useEffect(() => {
+    if (previewRef.current && !isSelectingArea) {
+      previewRef.current.srcObject = previewStream;
+    }
+  }, [previewStream, isSelectingArea]);
 
   const downloadName = useMemo(() => {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -65,23 +85,32 @@ function App() {
       <h1>Screen Recorder</h1>
 
       <section className="options">
-        <label className={isActive ? 'disabled' : undefined}>
+        <label className={optionsDisabled ? 'disabled' : undefined}>
           <input
             type="checkbox"
             checked={includeSystemAudio}
-            disabled={isActive}
+            disabled={optionsDisabled}
             onChange={(e) => setIncludeSystemAudio(e.target.checked)}
           />
           System audio (meetings, media players)
         </label>
-        <label className={isActive ? 'disabled' : undefined}>
+        <label className={optionsDisabled ? 'disabled' : undefined}>
           <input
             type="checkbox"
             checked={includeMic}
-            disabled={isActive}
+            disabled={optionsDisabled}
             onChange={(e) => setIncludeMic(e.target.checked)}
           />
           Microphone (optional narration)
+        </label>
+        <label className={optionsDisabled ? 'disabled' : undefined}>
+          <input
+            type="checkbox"
+            checked={customArea}
+            disabled={optionsDisabled}
+            onChange={(e) => setCustomArea(e.target.checked)}
+          />
+          Custom area (drag to select after sharing)
         </label>
       </section>
 
@@ -94,38 +123,47 @@ function App() {
         only capture a shared tab's own audio and cannot capture other apps' audio at all.
       </p>
 
-      <section className="controls">
-        {canStart && (
-          <button
-            className="primary"
-            onClick={() => startRecording({ includeMic, includeSystemAudio })}
-          >
-            Start Recording
-          </button>
-        )}
-        {isRecording && (
-          <button onClick={pauseRecording}>Pause</button>
-        )}
-        {isPaused && (
-          <button onClick={resumeRecording}>Resume</button>
-        )}
-        {isActive && (
-          <button className="danger" onClick={stopRecording}>
-            Stop
-          </button>
-        )}
-        {isActive && <span className="timer">{formatDuration(elapsedSeconds)}</span>}
-      </section>
+      {!isSelectingArea && (
+        <section className="controls">
+          {canStart && (
+            <button
+              className="primary"
+              onClick={() => startRecording({ includeMic, includeSystemAudio, customArea })}
+            >
+              Start Recording
+            </button>
+          )}
+          {isRecording && <button onClick={pauseRecording}>Pause</button>}
+          {isPaused && <button onClick={resumeRecording}>Resume</button>}
+          {isActive && (
+            <button className="danger" onClick={stopRecording}>
+              Stop
+            </button>
+          )}
+          {isActive && <span className="timer">{formatDuration(elapsedSeconds)}</span>}
+          {isActive && recordedBytes > 0 && <span className="filesize">{formatBytes(recordedBytes)}</span>}
+        </section>
+      )}
 
       {error && <p className="error">{error}</p>}
 
-      {previewStream && (
+      {isSelectingArea && previewStream && sourceVideoSize && (
+        <AreaSelector
+          previewStream={previewStream}
+          sourceSize={sourceVideoSize}
+          onConfirm={confirmAreaSelection}
+          onCancel={cancelAreaSelection}
+        />
+      )}
+
+      {!isSelectingArea && previewStream && (
         <video ref={previewRef} className="preview" autoPlay muted playsInline />
       )}
 
       {recordedUrl && (
         <section className="result">
           <video src={recordedUrl} controls className="preview" />
+          <p className="filesize">{formatBytes(recordedBytes)}</p>
           <a className="primary download" href={recordedUrl} download={downloadName}>
             Download recording (.webm)
           </a>

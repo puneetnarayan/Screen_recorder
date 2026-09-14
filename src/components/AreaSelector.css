@@ -1,0 +1,33 @@
+.area-selector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+}
+
+.area-selector-frame {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.area-selector-frame video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.area-selector-box {
+  position: absolute;
+  border: 2px solid #2563eb;
+  background: rgba(37, 99, 235, 0.2);
+  pointer-events: none;
+}
